@@ -1,0 +1,40 @@
+# 🐍 Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# 🧪 Virtual environment
+venv/
+env/
+ENV/
+
+# 🗃️ Model files
+*.gguf
+*.bin
+*.pt
+*.pth
+
+# 🔒 Secrets
+.env
+
+# 💻 IDE/Editor settings
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# 📄 OS metadata
+.DS_Store
+Thumbs.db
+
+# 🧪 Test/coverage artifacts
+.coverage
+htmlcov/
+.cache/
+pytest_cache/
+
+# 🪵 Logs
+*.log
+logs/

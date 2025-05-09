@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+requests
+python-dotenv
+llama-cpp-python
+llama-index
+llama-index-llms-llama-cpp
+llama-index-embeddings-huggingface
