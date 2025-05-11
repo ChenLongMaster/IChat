@@ -6,3 +6,10 @@ llama-cpp-python
 llama-index
 llama-index-llms-llama-cpp
 llama-index-embeddings-huggingface
+llama-index-readers-directory
+
+# Required for reading PowerPoint and image files
+torch
+transformers
+python-pptx
+Pillow

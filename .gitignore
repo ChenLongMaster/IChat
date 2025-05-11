@@ -7,7 +7,7 @@ __pycache__/
 
 # 🧪 Virtual environment
 venv/
-env/
+# env/
 ENV/
 
 # 🗃️ Model files
@@ -16,8 +16,8 @@ ENV/
 *.pt
 *.pth
 
-# 🔒 Secrets
-.env
+# # 🔒 Secrets
+# .env
 
 # 💻 IDE/Editor settings
 .vscode/
