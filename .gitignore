@@ -17,7 +17,7 @@ ENV/
 *.pth
 
 # # 🔒 Secrets
-# .env
+.env
 
 # 💻 IDE/Editor settings
 .vscode/
