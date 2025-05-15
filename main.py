@@ -6,6 +6,16 @@ from fastapi import FastAPI, UploadFile, File, Form
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+from huggingface_hub import InferenceClient
+from requests.exceptions import HTTPError
+import requests
+
+import shutil
+
+from qdrant_client import QdrantClient
+from llama_index.vector_stores.qdrant import QdrantVectorStore
+from llama_index.core import StorageContext, VectorStoreIndex
+
 from llama_cpp import Llama
 from llama_index.llms.llama_cpp import LlamaCPP
 from llama_index.llms.llama_cpp.llama_utils import messages_to_prompt, completion_to_prompt
@@ -60,6 +70,10 @@ def get_storage_paths(tenant_id: str):
 
 # === Main app function ===
 def main_app():
+    client = QdrantClient(host="localhost", port=6333)
+    vector_store = QdrantVectorStore(client=client, collection_name=tenant_name)
+    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    index = VectorStoreIndex.from_documents(documents, storage_context=storage_context)
     app = FastAPI()
 
     app.add_middleware(
@@ -98,6 +112,8 @@ def main_app():
         return {"clients": clients}
 
 
+    from huggingface_hub import InferenceClient
+
     @app.post("/bot")
     async def get_bot_response(req: PromptRequest):
         tenant_storage, data_dir = get_storage_paths(req.tenant_id)
@@ -116,23 +132,61 @@ def main_app():
         else:
             print(f"⚠️ No custom prompt file found. Using default prompt.")
 
+        # RAG: Retrieve context
         storage_context = StorageContext.from_defaults(persist_dir=tenant_storage)
         index = load_index_from_storage(storage_context)
         retriever = index.as_retriever(similarity_top_k=3)
-        memory = ChatMemoryBuffer.from_defaults(token_limit=1000)
+        nodes = retriever.retrieve(req.user_prompt)
+        context = "\n\n".join([n.get_content() for n in nodes])
 
-        chat_engine = ContextChatEngine.from_defaults(
-            retriever=retriever,
-            memory=memory
+        # Construct the full message with context
+        user_prompt = f"{req.user_prompt}\n\nContext:\n{context}"
+
+        client = InferenceClient(
+            provider="cerebras",
+            api_key=os.getenv("HF_API_TOKEN")
         )
 
-        messages = [
-            ChatMessage(role=MessageRole.SYSTEM, content=system_prompt),
-            ChatMessage(role=MessageRole.USER, content=req.user_prompt)
-        ]
+        try:
+            stream = client.chat.completions.create(
+                model="meta-llama/Llama-3.3-70B-Instruct",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.5,
+                max_tokens=500,
+                top_p=0.7,
+                stream=True
+            )
 
-        response = llm.chat(messages)
-        return {"response": response.message.content}
+            output = ""
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta:
+                    delta = chunk.choices[0].delta
+                    if "content" in delta and delta["content"] is not None:
+                        output += delta["content"]
+
+            return {"response": output}
+
+        except HTTPError as e:
+            status = getattr(e.response, "status_code", "unknown")
+            text = getattr(e.response, "text", str(e))
+            if status == 429:
+                return {"error": "🚦 Hugging Face rate limit reached. Please try again later."}
+            elif status == 401:
+                return {"error": "🔐 Invalid or missing Hugging Face API token."}
+            elif status == 403:
+                return {"error": "⛔ Access to this model is restricted or you’ve hit your token quota."}
+            else:
+                return {"error": f"❌ Hugging Face API error: {status} - {text}"}
+
+        except requests.exceptions.RequestException as e:
+            return {"error": f"🌐 Network error while contacting Hugging Face: {str(e)}"}
+
+        except Exception as e:
+            return {"error": f"🔥 Unexpected error: {str(e)}"}
+
 
     @app.post("/reset")
     async def reset_memory():
@@ -163,10 +217,41 @@ def main_app():
                     input_files.append(full_path)
 
         documents = SimpleDirectoryReader(input_files=input_files).load_data()
-        index = VectorStoreIndex.from_documents(documents)
+        # Initialize Qdrant client and vector store
+        client = QdrantClient(host="localhost", port=6333)
+        vector_store = QdrantVectorStore(client=client, collection_name=tenant_name)
+        storage_context = StorageContext.from_defaults(vector_store=vector_store)
+
+        # Create index and store documents
+        index = VectorStoreIndex.from_documents(documents, storage_context=storage_context)        
         index.storage_context.persist(tenant_storage_dir)
 
         return {"message": f"Data for tenant '{tenant_name}' uploaded and indexed successfully."}
+
+    @app.post("/clear-all-data")
+    async def clear_all_data():
+        data_dir = "data"
+        storage_dir = "storage"
+
+        try:
+            # Clear all tenant folders in data/
+            if os.path.exists(data_dir):
+                for tenant in os.listdir(data_dir):
+                    tenant_path = os.path.join(data_dir, tenant)
+                    if os.path.isdir(tenant_path):
+                        shutil.rmtree(tenant_path)
+
+            # Clear all tenant folders in storage/
+            if os.path.exists(storage_dir):
+                for tenant in os.listdir(storage_dir):
+                    tenant_path = os.path.join(storage_dir, tenant)
+                    if os.path.isdir(tenant_path):
+                        shutil.rmtree(tenant_path)
+
+            return {"message": "✅ All tenant data cleared from data/ and storage/."}
+
+        except Exception as e:
+            return {"error": f"❌ Failed to clear data: {str(e)}"}
 
     return app
     
