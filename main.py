@@ -134,8 +134,7 @@ def main_app():
             collection_names = [col.name for col in collections]
 
             if req.tenant_id not in collection_names:
-                return {"error": f"❌ No vector index found for tenant '{req.tenant_id}'"}
-
+                raise HTTPException(status_code=500, detail=f"No vector index found for tenant '{req.tenant_id}'")
             # RAG: Load index from Qdrant
             vector_store = QdrantVectorStore(client=qdrant_client, collection_name=req.tenant_id)
             index = VectorStoreIndex.from_vector_store(vector_store)
@@ -144,7 +143,7 @@ def main_app():
             context = "\n\n".join([n.get_content() for n in nodes])
 
         except Exception as e:
-            return {"error": f"🚫 Failed to access vector DB for tenant '{req.tenant_id}': {str(e)}"}
+            raise HTTPException(status_code=500, detail=f"Failed to access vector DB: {str(e)}")
 
         # 👤 Final constructed prompt with context
         user_prompt = f"{req.user_prompt}\n\nContext:\n{context}"
@@ -179,20 +178,13 @@ def main_app():
             status = getattr(e.response, "status_code", "unknown")
             text = getattr(e.response, "text", str(e))
             if status == 429:
-                return {"error": "🚦 Hugging Face rate limit reached. Please try again later."}
+                raise HTTPException(status_code=429, detail=f"Hugging Face rate limit reached. Please try again later.")
             elif status == 401:
-                return {"error": "🔐 Invalid or missing Hugging Face API token."}
+                raise HTTPException(status_code=401, detail=f"Invalid or missing Hugging Face API token.")
             elif status == 403:
-                return {"error": "⛔ Access to this model is restricted or you’ve hit your token quota."}
+                raise HTTPException(status_code=403, detail=f"Access to this model is restricted or you’ve hit your token quota..")
             else:
-                return {"error": f"❌ Hugging Face API error: {status} - {text}"}
-
-        except requests.exceptions.RequestException as e:
-            return {"error": f"🌐 Network error while contacting Hugging Face: {str(e)}"}
-
-        except Exception as e:
-            return {"error": f"🔥 Unexpected error: {str(e)}"}
-
+                raise HTTPException(status_code=500, detail=f"Inference API error: {str(e)}")
 
     @app.post("/reset")
     async def reset_memory():
