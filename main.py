@@ -9,7 +9,8 @@ from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
 from requests.exceptions import HTTPError
 import requests
-
+from fastapi.responses import JSONResponse
+import traceback
 import shutil
 
 from qdrant_client import QdrantClient
@@ -70,10 +71,6 @@ def get_storage_paths(tenant_id: str):
 
 # === Main app function ===
 def main_app():
-    client = QdrantClient(host="localhost", port=6333)
-    vector_store = QdrantVectorStore(client=client, collection_name=tenant_name)
-    storage_context = StorageContext.from_defaults(vector_store=vector_store)
-    index = VectorStoreIndex.from_documents(documents, storage_context=storage_context)
     app = FastAPI()
 
     app.add_middleware(
@@ -116,11 +113,9 @@ def main_app():
 
     @app.post("/bot")
     async def get_bot_response(req: PromptRequest):
-        tenant_storage, data_dir = get_storage_paths(req.tenant_id)
+        _, data_dir = get_storage_paths(req.tenant_id)
 
-        if not os.path.exists(os.path.join(tenant_storage, "docstore.json")):
-            return {"error": f"No data found for tenant '{req.tenant_id}'"}
-
+        # Load system prompt
         prompt_path = os.path.join(data_dir, "Prompt", f"{req.tenant_id}_prompt.txt")
         print(f"🔍 Looking for prompt file at: {prompt_path}")
 
@@ -132,20 +127,31 @@ def main_app():
         else:
             print(f"⚠️ No custom prompt file found. Using default prompt.")
 
-        # RAG: Retrieve context
-        storage_context = StorageContext.from_defaults(persist_dir=tenant_storage)
-        index = load_index_from_storage(storage_context)
-        retriever = index.as_retriever(similarity_top_k=3)
-        nodes = retriever.retrieve(req.user_prompt)
-        context = "\n\n".join([n.get_content() for n in nodes])
+        # 🔍 Check if Qdrant collection exists
+        try:
+            qdrant_client = QdrantClient(host="localhost", port=6333)
+            collections = qdrant_client.get_collections().collections
+            collection_names = [col.name for col in collections]
 
-        # Construct the full message with context
+            if req.tenant_id not in collection_names:
+                return {"error": f"❌ No vector index found for tenant '{req.tenant_id}'"}
+
+            # RAG: Load index from Qdrant
+            vector_store = QdrantVectorStore(client=qdrant_client, collection_name=req.tenant_id)
+            index = VectorStoreIndex.from_vector_store(vector_store)
+            retriever = index.as_retriever(similarity_top_k=3)
+            nodes = retriever.retrieve(req.user_prompt)
+            context = "\n\n".join([n.get_content() for n in nodes])
+
+        except Exception as e:
+            return {"error": f"🚫 Failed to access vector DB for tenant '{req.tenant_id}': {str(e)}"}
+
+        # 👤 Final constructed prompt with context
         user_prompt = f"{req.user_prompt}\n\nContext:\n{context}"
 
-        client = InferenceClient(
-            provider="cerebras",
-            api_key=os.getenv("HF_API_TOKEN")
-        )
+        # 🤖 Call Hugging Face Inference API
+        from huggingface_hub import InferenceClient
+        client = InferenceClient(provider="cerebras", api_key=os.getenv("HF_API_TOKEN"))
 
         try:
             stream = client.chat.completions.create(
@@ -194,39 +200,48 @@ def main_app():
         memory = ChatMemoryBuffer.from_defaults(token_limit=1000)
         return {"message": "Chat memory cleared."}
 
+    
+
     @app.post("/upload-data/")
     async def upload_data(tenant_name: str = Form(...), file: UploadFile = File(...)):
-        tenant_data_dir = f"data/{tenant_name}"
-        tenant_storage_dir = f"storage/{tenant_name}"
-        os.makedirs(tenant_data_dir, exist_ok=True)
+        try:
+            tenant_data_dir = f"data/{tenant_name}"
+            os.makedirs(tenant_data_dir, exist_ok=True)
 
-        zip_path = os.path.join(tenant_data_dir, "upload.zip")
-        with open(zip_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            zip_path = os.path.join(tenant_data_dir, "upload.zip")
+            with open(zip_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
 
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(tenant_data_dir)
-        os.remove(zip_path)
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(tenant_data_dir)
+            os.remove(zip_path)
 
-        # 🛠️ Manually filter input files
-        input_files = []
-        for root, _, files in os.walk(tenant_data_dir):
-            for f in files:
-                full_path = os.path.join(root, f)
-                if exclude_prompt_folder(full_path):
-                    input_files.append(full_path)
+            input_files = []
+            for root, _, files in os.walk(tenant_data_dir):
+                for f in files:
+                    full_path = os.path.join(root, f)
+                    if exclude_prompt_folder(full_path):
+                        input_files.append(full_path)
 
-        documents = SimpleDirectoryReader(input_files=input_files).load_data()
-        # Initialize Qdrant client and vector store
-        client = QdrantClient(host="localhost", port=6333)
-        vector_store = QdrantVectorStore(client=client, collection_name=tenant_name)
-        storage_context = StorageContext.from_defaults(vector_store=vector_store)
+            documents = SimpleDirectoryReader(input_files=input_files).load_data()
 
-        # Create index and store documents
-        index = VectorStoreIndex.from_documents(documents, storage_context=storage_context)        
-        index.storage_context.persist(tenant_storage_dir)
+            # 🔍 Wrap this part to catch Qdrant issues
+            try:
+                client = QdrantClient(host="localhost", port=6333)
+                vector_store = QdrantVectorStore(client=client, collection_name=tenant_name)
+                storage_context = StorageContext.from_defaults(vector_store=vector_store)
+                index = VectorStoreIndex.from_documents(documents, storage_context=storage_context)
+            except Exception as vector_err:
+                return JSONResponse(status_code=500, content={"error": f"Qdrant error: {str(vector_err)}"})
 
-        return {"message": f"Data for tenant '{tenant_name}' uploaded and indexed successfully."}
+            return {"message": f"Data for tenant '{tenant_name}' uploaded and indexed successfully."}
+
+        except Exception as e:
+            return JSONResponse(status_code=500, content={
+                "error": str(e),
+                "trace": traceback.format_exc()
+            })
+
 
     @app.post("/clear-all-data")
     async def clear_all_data():
