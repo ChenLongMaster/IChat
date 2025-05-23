@@ -113,6 +113,7 @@ def main_app():
 
     @app.post("/bot")
     async def get_bot_response(req: PromptRequest):
+        print(f"User prompt: {req.user_prompt}")
         _, data_dir = get_storage_paths(req.tenant_id)
 
         # Load system prompt
@@ -123,7 +124,7 @@ def main_app():
         if os.path.exists(prompt_path):
             with open(prompt_path, "r", encoding="utf-8") as f:
                 system_prompt = f.read()
-            print(f"📄 Loaded system prompt:\n{system_prompt}")
+            print(f"📄 System prompt loaded.")
         else:
             print(f"⚠️ No custom prompt file found. Using default prompt.")
 
