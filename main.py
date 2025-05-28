@@ -2,7 +2,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 import shutil
 import zipfile
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form,HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -31,7 +31,9 @@ from llama_index.core import (
     load_index_from_storage,
 )
 from llama_index.core.chat_engine import ContextChatEngine
+from llama_index.readers.web import BeautifulSoupWebReader
 
+import uuid
 # === Load ENV ===
 load_dotenv()
 
@@ -49,6 +51,9 @@ class PromptRequest(BaseModel):
     tenant_id: str
     user_prompt: str
 
+class CrawlRequest(BaseModel):
+    url: str
+    tenant_id: str
 # === Helpers ===
 def get_model_kwargs():
     kwargs = {"n_threads": 8}
@@ -113,12 +118,10 @@ def main_app():
 
     @app.post("/bot")
     async def get_bot_response(req: PromptRequest):
-        print(f"User prompt: {req.user_prompt}")
         _, data_dir = get_storage_paths(req.tenant_id)
 
         # Load system prompt
         prompt_path = os.path.join(data_dir, "Prompt", f"{req.tenant_id}_prompt.txt")
-        print(f"🔍 Looking for prompt file at: {prompt_path}")
 
         system_prompt = DEFAULT_PROMPT
         if os.path.exists(prompt_path):
@@ -260,6 +263,59 @@ def main_app():
 
         except Exception as e:
             return {"error": f"❌ Failed to clear data: {str(e)}"}
+
+    @app.post("/fetch-links")
+    async def fetch_links(crawl_request: CrawlRequest):
+        url = crawl_request.url
+        tenant_id = crawl_request.tenant_id
+
+        try:
+            # Initialize the BeautifulSoup-based web reader
+            loader = BeautifulSoupWebReader()
+            documents = loader.load_data(urls=[url])
+
+            if not documents:
+                raise HTTPException(status_code=404, detail="No content found on the page.")
+
+            # Generate a unique vector_ingestion_id (batch identifier)
+            vector_ingestion_id = str(uuid.uuid4())
+
+             # Add metadata to each document
+            for idx, doc in enumerate(documents):
+                doc.metadata = {
+                    "tenant_id": tenant_id,
+                    "source_type": "web_crawl",
+                    "source_origin": url,
+                    "vector_ingestion_id": vector_ingestion_id
+                }
+
+                # Print or log the data before saving
+                print(f"--- Document {idx + 1} ---")
+                print(f"Metadata: {doc.metadata}")
+                print(f"Content (first 500 chars): {doc.text[:500]}")
+                print("------")
+            
+            # Setup Qdrant connection (adjust host/port as needed)
+            qdrant_client = QdrantClient(host="localhost", port=6333)
+            collection_name = f"{tenant_id}_collection"  # Separate collection per tenant
+
+            # Setup embedder + vector store
+            vector_store = QdrantVectorStore(client=qdrant_client, collection_name=collection_name)
+            storage_context = StorageContext.from_defaults(vector_store=vector_store)
+
+            # Create or update the index
+            VectorStoreIndex.from_documents(documents, storage_context=storage_context)
+
+            return {
+                "message": "Successfully fetched, embedded, and stored content.",
+                "url": url,
+                "vector_ingestion_id": vector_ingestion_id,
+                "document_count": len(documents)
+            }
+
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to fetch, embed, or store URL: {str(e)}")
+
 
     return app
     
