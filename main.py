@@ -11,6 +11,7 @@ import requests
 from fastapi.responses import JSONResponse
 import traceback
 import shutil
+from urllib.parse import urlparse
 
 from qdrant_client import QdrantClient
 from llama_index.vector_stores.qdrant import QdrantVectorStore
@@ -52,6 +53,7 @@ class PromptRequest(BaseModel):
 
 class CrawlRequest(BaseModel):
     tenant_id: str
+    vector_id: str
     url: str
 # === Helpers ===
 def get_model_kwargs():
@@ -248,12 +250,18 @@ def main_app():
         except Exception as e:
             return {"error": f"Failed to clear data: {str(e)}"}
 
-    @app.post("/fetch-links")
-    async def fetch_links(crawl_request: CrawlRequest):
+    @app.post("/crawl-job")
+    async def crawl_job(crawl_request: CrawlRequest):
+        print(f"Request:{crawl_request}")
         url = crawl_request.url
         tenant_id = crawl_request.tenant_id
+        vector_id = crawl_request.vector_id
 
         try:
+            # Extract domain from the URL
+            parsed_url = urlparse(url)
+            website_domain = parsed_url.netloc.replace("www.", "")  # remove www if present
+
             # Initialize the BeautifulSoup-based web reader
             loader = BeautifulSoupWebReader()
             documents = loader.load_data(urls=[url])
@@ -265,9 +273,6 @@ def main_app():
             tenant_crawl_dir = f"data/{tenant_id}/crawl"
             os.makedirs(tenant_crawl_dir, exist_ok=True)
 
-            # Generate a unique crawl ID
-            vector_id = str(uuid.uuid4())
-
             for idx, doc in enumerate(documents):
                 # Add metadata
                 doc.metadata = {
@@ -277,8 +282,10 @@ def main_app():
                     "vector_id": vector_id
                 }
 
-                # Save each document as a text file
-                file_path = os.path.join(tenant_crawl_dir, f"{vector_id}_{idx + 1}.txt")
+                # Build filename → domain + vector_id
+                file_name = f"{website_domain}_{vector_id}.txt"
+                file_path = os.path.join(tenant_crawl_dir, file_name)
+
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(doc.text)
 
