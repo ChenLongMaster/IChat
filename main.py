@@ -55,6 +55,8 @@ class CrawlRequest(BaseModel):
     tenant_id: str
     vector_id: str
     url: str
+class TrainRequest(BaseModel):
+    tenant_id: str
 # === Helpers ===
 def get_model_kwargs():
     kwargs = {"n_threads": 8}
@@ -194,11 +196,11 @@ def main_app():
         memory = ChatMemoryBuffer.from_defaults(token_limit=1000)
         return {"message": "Chat memory cleared."}
 
-    @app.post("/train-rag/")
-    async def train_rag(tenant_name: str = Form(...)):
+    @app.post("/train-rag")
+    async def train_rag(train_request: TrainRequest):
         try:
-            tenant_data_dir = f"data/{tenant_name}"
-
+            tenant_id = train_request.tenant_id
+            tenant_data_dir = f"data/{tenant_id}"
             input_files = []
             for root, _, files in os.walk(tenant_data_dir):
                 for f in files:
@@ -212,13 +214,13 @@ def main_app():
             # 🔍 Push to Qdrant
             try:
                 client = QdrantClient(host="localhost", port=6333)
-                vector_store = QdrantVectorStore(client=client, collection_name=tenant_name)
+                vector_store = QdrantVectorStore(client=client, collection_name=tenant_id)
                 storage_context = StorageContext.from_defaults(vector_store=vector_store)
                 VectorStoreIndex.from_documents(documents, storage_context=storage_context)
             except Exception as vector_err:
                 return JSONResponse(status_code=500, content={"error": f"Qdrant error: {str(vector_err)}"})
 
-            return {"message": f"RAG model for tenant '{tenant_name}' trained and updated successfully."}
+            return {"message": f"RAG model for tenant '{tenant_id}' trained and updated successfully."}
 
         except Exception as e:
             return JSONResponse(status_code=500, content={
