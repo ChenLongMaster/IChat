@@ -5,7 +5,6 @@ import zipfile
 from fastapi import FastAPI, UploadFile, File, Form,HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
-
 from huggingface_hub import InferenceClient
 from requests.exceptions import HTTPError
 import requests
@@ -52,13 +51,13 @@ class PromptRequest(BaseModel):
     user_prompt: str
 
 class CrawlRequest(BaseModel):
-    url: str
     tenant_id: str
+    url: str
 # === Helpers ===
 def get_model_kwargs():
     kwargs = {"n_threads": 8}
     kwargs["n_gpu_layers"] = -1 if USE_GPU else 0
-    print("🚀 Using GPU" if USE_GPU else "💻 Using CPU")
+    print("Using GPU" if USE_GPU else "Using CPU")
     return kwargs
 
 def load_system_prompt(data_dir: str, tenant_id: str) -> str:
@@ -110,11 +109,9 @@ def main_app():
             name for name in os.listdir(client_root)
             if os.path.isdir(os.path.join(client_root, name))
         ]
-        
         return {"clients": clients}
 
 
-    from huggingface_hub import InferenceClient
 
     @app.post("/bot")
     async def get_bot_response(req: PromptRequest):
@@ -127,9 +124,9 @@ def main_app():
         if os.path.exists(prompt_path):
             with open(prompt_path, "r", encoding="utf-8") as f:
                 system_prompt = f.read()
-            print(f"📄 System prompt loaded.")
+            print(f"System prompt loaded.")
         else:
-            print(f"⚠️ No custom prompt file found. Using default prompt.")
+            print(f"No custom prompt file found. Using default prompt.")
 
         # 🔍 Check if Qdrant collection exists
         try:
@@ -152,8 +149,7 @@ def main_app():
         # 👤 Final constructed prompt with context
         user_prompt = f"{req.user_prompt}\n\nContext:\n{context}"
 
-        # 🤖 Call Hugging Face Inference API
-        from huggingface_hub import InferenceClient
+        print("API key loaded:", os.getenv("HF_API_TOKEN"))
         client = InferenceClient(provider="cerebras", api_key=os.getenv("HF_API_TOKEN"))
 
         try:
@@ -196,48 +192,37 @@ def main_app():
         memory = ChatMemoryBuffer.from_defaults(token_limit=1000)
         return {"message": "Chat memory cleared."}
 
-    
-
-    @app.post("/upload-data/")
-    async def upload_data(tenant_name: str = Form(...), file: UploadFile = File(...)):
+    @app.post("/train-rag/")
+    async def train_rag(tenant_name: str = Form(...)):
         try:
             tenant_data_dir = f"data/{tenant_name}"
-            os.makedirs(tenant_data_dir, exist_ok=True)
-
-            zip_path = os.path.join(tenant_data_dir, "upload.zip")
-            with open(zip_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(tenant_data_dir)
-            os.remove(zip_path)
 
             input_files = []
             for root, _, files in os.walk(tenant_data_dir):
                 for f in files:
                     full_path = os.path.join(root, f)
-                    if exclude_prompt_folder(full_path):
-                        input_files.append(full_path)
+                    input_files.append(full_path)
+            if not input_files:
+                return JSONResponse(status_code=400, content={"error": "No valid files found to process."})
 
             documents = SimpleDirectoryReader(input_files=input_files).load_data()
 
-            # 🔍 Wrap this part to catch Qdrant issues
+            # 🔍 Push to Qdrant
             try:
                 client = QdrantClient(host="localhost", port=6333)
                 vector_store = QdrantVectorStore(client=client, collection_name=tenant_name)
                 storage_context = StorageContext.from_defaults(vector_store=vector_store)
-                index = VectorStoreIndex.from_documents(documents, storage_context=storage_context)
+                VectorStoreIndex.from_documents(documents, storage_context=storage_context)
             except Exception as vector_err:
                 return JSONResponse(status_code=500, content={"error": f"Qdrant error: {str(vector_err)}"})
 
-            return {"message": f"Data for tenant '{tenant_name}' uploaded and indexed successfully."}
+            return {"message": f"RAG model for tenant '{tenant_name}' trained and updated successfully."}
 
         except Exception as e:
             return JSONResponse(status_code=500, content={
                 "error": str(e),
                 "trace": traceback.format_exc()
             })
-
 
     @app.post("/clear-all-data")
     async def clear_all_data():
@@ -259,10 +244,9 @@ def main_app():
                     if os.path.isdir(tenant_path):
                         shutil.rmtree(tenant_path)
 
-            return {"message": "✅ All tenant data cleared from data/ and storage/."}
-
+            return {"message": "All tenant data cleared from data/ and storage/."}
         except Exception as e:
-            return {"error": f"❌ Failed to clear data: {str(e)}"}
+            return {"error": f"Failed to clear data: {str(e)}"}
 
     @app.post("/fetch-links")
     async def fetch_links(crawl_request: CrawlRequest):
@@ -277,48 +261,38 @@ def main_app():
             if not documents:
                 raise HTTPException(status_code=404, detail="No content found on the page.")
 
-            # Generate a unique vector_ingestion_id (batch identifier)
-            vector_ingestion_id = str(uuid.uuid4())
+            # Prepare save folder
+            tenant_crawl_dir = f"data/{tenant_id}/crawl"
+            os.makedirs(tenant_crawl_dir, exist_ok=True)
 
-             # Add metadata to each document
+            # Generate a unique crawl ID
+            vector_id = str(uuid.uuid4())
+
             for idx, doc in enumerate(documents):
+                # Add metadata
                 doc.metadata = {
                     "tenant_id": tenant_id,
                     "source_type": "web_crawl",
                     "source_origin": url,
-                    "vector_ingestion_id": vector_ingestion_id
+                    "vector_id": vector_id
                 }
 
-                # Print or log the data before saving
-                print(f"--- Document {idx + 1} ---")
-                print(f"Metadata: {doc.metadata}")
-                print(f"Content (first 500 chars): {doc.text[:500]}")
-                print("------")
-            
-            # Setup Qdrant connection (adjust host/port as needed)
-            qdrant_client = QdrantClient(host="localhost", port=6333)
-            collection_name = f"{tenant_id}_collection"  # Separate collection per tenant
+                # Save each document as a text file
+                file_path = os.path.join(tenant_crawl_dir, f"{vector_id}_{idx + 1}.txt")
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(doc.text)
 
-            # Setup embedder + vector store
-            vector_store = QdrantVectorStore(client=qdrant_client, collection_name=collection_name)
-            storage_context = StorageContext.from_defaults(vector_store=vector_store)
-
-            # Create or update the index
-            VectorStoreIndex.from_documents(documents, storage_context=storage_context)
+                print(f"Saved crawled content to {file_path}")
 
             return {
-                "message": "Successfully fetched, embedded, and stored content.",
+                "message": "Successfully fetched and saved content.",
                 "url": url,
-                "vector_ingestion_id": vector_ingestion_id,
+                "vector_id": vector_id,
                 "document_count": len(documents)
             }
-
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to fetch, embed, or store URL: {str(e)}")
-
-
+            raise HTTPException(status_code=500, detail=f"Failed to fetch and save URL: {str(e)}")
     return app
-    
 
 # === Run App ===
 app = main_app()
