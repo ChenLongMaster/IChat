@@ -74,7 +74,7 @@ def load_system_prompt(data_dir: str, tenant_id: str) -> str:
 def get_storage_paths(tenant_id: str):
     return (
         f"storage/{tenant_id}",
-        f"data/{tenant_id}",
+        f"D:\\IChat.Sources\\Upload\\{tenant_id}"
     )
 
 # === Main app function ===
@@ -200,7 +200,7 @@ def main_app():
     async def train_rag(train_request: TrainRequest):
         try:
             tenant_id = train_request.tenant_id
-            tenant_data_dir = f"data/{tenant_id}"
+            tenant_data_dir = f"D:\\IChat.Sources\\Upload\\{tenant_id}"
             input_files = []
             for root, _, files in os.walk(tenant_data_dir):
                 for f in files:
@@ -272,7 +272,7 @@ def main_app():
                 raise HTTPException(status_code=404, detail="No content found on the page.")
 
             # Prepare save folder
-            tenant_crawl_dir = f"data/{tenant_id}/crawl"
+            tenant_crawl_dir = f"D:\\IChat.Sources\\Upload\\{tenant_id}\\crawl"
             os.makedirs(tenant_crawl_dir, exist_ok=True)
 
             for idx, doc in enumerate(documents):
