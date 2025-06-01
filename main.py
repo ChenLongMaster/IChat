@@ -41,6 +41,7 @@ load_dotenv()
 MODEL_PATH = os.getenv("MODEL_PATH")
 USE_GPU = os.getenv("USE_GPU", "False").lower() == "true"
 DEFAULT_PROMPT = "You are a helpful assistant."
+ROOT_FOLDER = r"C:\\IChat.Sources\\Upload"
 
 # Custom file filter to exclude files from the 'Prompt' directory
 def exclude_prompt_folder(filepath: str) -> bool:
@@ -119,18 +120,14 @@ def main_app():
 
     @app.post("/bot")
     async def get_bot_response(req: PromptRequest):
-        _, data_dir = get_storage_paths(req.tenant_id)
-
-        # Load system prompt
-        prompt_path = os.path.join(data_dir, "Prompt", f"{req.tenant_id}_prompt.txt")
-
+        prompt_path = os.path.join(ROOT_FOLDER, req.tenant_id, "Instruction", "instruction.txt")
         system_prompt = DEFAULT_PROMPT
         if os.path.exists(prompt_path):
             with open(prompt_path, "r", encoding="utf-8") as f:
                 system_prompt = f.read()
-            print(f"System prompt loaded.")
+            print(f"✅ System prompt loaded from {prompt_path}")
         else:
-            print(f"No custom prompt file found. Using default prompt.")
+            print(f"⚠️ No custom prompt file found at {prompt_path}. Using default prompt.")
 
         # 🔍 Check if Qdrant collection exists
         try:
@@ -140,7 +137,7 @@ def main_app():
 
             if req.tenant_id not in collection_names:
                 raise HTTPException(status_code=500, detail=f"No vector index found for tenant '{req.tenant_id}'")
-            # RAG: Load index from Qdrant
+
             vector_store = QdrantVectorStore(client=qdrant_client, collection_name=req.tenant_id)
             index = VectorStoreIndex.from_vector_store(vector_store)
             retriever = index.as_retriever(similarity_top_k=3)
@@ -153,7 +150,7 @@ def main_app():
         # 👤 Final constructed prompt with context
         user_prompt = f"{req.user_prompt}\n\nContext:\n{context}"
 
-        print("API key loaded:", os.getenv("HF_API_TOKEN"))
+        print("✅ API key loaded:", os.getenv("HF_API_TOKEN"))
         client = InferenceClient(provider="cerebras", api_key=os.getenv("HF_API_TOKEN"))
 
         try:
@@ -186,7 +183,7 @@ def main_app():
             elif status == 401:
                 raise HTTPException(status_code=401, detail=f"Invalid or missing Hugging Face API token.")
             elif status == 403:
-                raise HTTPException(status_code=403, detail=f"Access to this model is restricted or you’ve hit your token quota..")
+                raise HTTPException(status_code=403, detail=f"Access to this model is restricted or you’ve hit your token quota.")
             else:
                 raise HTTPException(status_code=500, detail=f"Inference API error: {str(e)}")
 
@@ -196,34 +193,44 @@ def main_app():
         memory = ChatMemoryBuffer.from_defaults(token_limit=1000)
         return {"message": "Chat memory cleared."}
 
+    import traceback
+
     @app.post("/train-rag")
     async def train_rag(train_request: TrainRequest):
         try:
             tenant_id = train_request.tenant_id
-            tenant_data_dir = f"D:\\IChat.Sources\\Upload\\{tenant_id}"
+            tenant_data_dir = f"{ROOT_FOLDER}\\{tenant_id}"
             input_files = []
+
             for root, _, files in os.walk(tenant_data_dir):
                 for f in files:
+                    if f.lower() == "instruction.txt":
+                        continue
                     full_path = os.path.join(root, f)
                     input_files.append(full_path)
+
             if not input_files:
-                return JSONResponse(status_code=400, content={"error": "No valid files found to process."})
+                raise HTTPException(status_code=400, detail=f"No valid files found to process.")
+
+
+            # Log each file path
+            print(f"\n📂 Files being loaded for tenant '{tenant_id}':")
+            for file_path in input_files:
+                print(f" - {file_path}")
 
             documents = SimpleDirectoryReader(input_files=input_files).load_data()
 
-            # 🔍 Push to Qdrant
-            try:
-                client = QdrantClient(host="localhost", port=6333)
-                vector_store = QdrantVectorStore(client=client, collection_name=tenant_id)
-                storage_context = StorageContext.from_defaults(vector_store=vector_store)
-                VectorStoreIndex.from_documents(documents, storage_context=storage_context)
-            except Exception as vector_err:
-                return JSONResponse(status_code=500, content={"error": f"Qdrant error: {str(vector_err)}"})
+            client = QdrantClient(host="localhost", port=6333)
+            vector_store = QdrantVectorStore(client=client, collection_name=tenant_id)
+            storage_context = StorageContext.from_defaults(vector_store=vector_store)
+            VectorStoreIndex.from_documents(documents, storage_context=storage_context)
 
             return {"message": f"RAG model for tenant '{tenant_id}' trained and updated successfully."}
 
         except Exception as e:
-            return JSONResponse(status_code=500, content={
+            print("❌ ERROR OCCURRED:")
+            print(traceback.format_exc())
+            raise HTTPException(status_code=500, detail={
                 "error": str(e),
                 "trace": traceback.format_exc()
             })
@@ -272,7 +279,7 @@ def main_app():
                 raise HTTPException(status_code=404, detail="No content found on the page.")
 
             # Prepare save folder
-            tenant_crawl_dir = f"D:\\IChat.Sources\\Upload\\{tenant_id}\\crawl"
+            tenant_crawl_dir = f"{ROOT_FOLDER}\\{tenant_id}\\crawl"
             os.makedirs(tenant_crawl_dir, exist_ok=True)
 
             for idx, doc in enumerate(documents):
