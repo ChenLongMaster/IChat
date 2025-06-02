@@ -41,7 +41,7 @@ load_dotenv()
 MODEL_PATH = os.getenv("MODEL_PATH")
 USE_GPU = os.getenv("USE_GPU", "False").lower() == "true"
 DEFAULT_PROMPT = "You are a helpful assistant."
-ROOT_FOLDER = r"C:\\IChat.Sources\\Upload"
+ROOT_FOLDER = r"D:\\IChat.Sources\\Upload"
 
 # Custom file filter to exclude files from the 'Prompt' directory
 def exclude_prompt_folder(filepath: str) -> bool:
