@@ -125,32 +125,34 @@ def main_app():
         if os.path.exists(prompt_path):
             with open(prompt_path, "r", encoding="utf-8") as f:
                 system_prompt = f.read()
-            print(f"✅ System prompt loaded from {prompt_path}")
+            print(f"System prompt loaded from {prompt_path}")
         else:
-            print(f"⚠️ No custom prompt file found at {prompt_path}. Using default prompt.")
-
+            print(f"No custom prompt file found at {prompt_path}. Using default prompt.")
+        context = ""
         # 🔍 Check if Qdrant collection exists
         try:
+            # Try connecting to Qdrant and retrieving context
             qdrant_client = QdrantClient(host="localhost", port=6333)
             collections = qdrant_client.get_collections().collections
             collection_names = [col.name for col in collections]
 
-            if req.tenant_id not in collection_names:
-                raise HTTPException(status_code=500, detail=f"No vector index found for tenant '{req.tenant_id}'")
-
-            vector_store = QdrantVectorStore(client=qdrant_client, collection_name=req.tenant_id)
-            index = VectorStoreIndex.from_vector_store(vector_store)
-            retriever = index.as_retriever(similarity_top_k=3)
-            nodes = retriever.retrieve(req.user_prompt)
-            context = "\n\n".join([n.get_content() for n in nodes])
+            if req.tenant_id in collection_names:
+                vector_store = QdrantVectorStore(client=qdrant_client, collection_name=req.tenant_id)
+                index = VectorStoreIndex.from_vector_store(vector_store)
+                retriever = index.as_retriever(similarity_top_k=3)
+                nodes = retriever.retrieve(req.user_prompt)
+                context = "\n\n".join([n.get_content() for n in nodes])
+                print(f"Retrieved {len(nodes)} context nodes.")
+            else:
+                print(f"No vector index found for tenant '{req.tenant_id}'. Proceeding without RAG context.")
 
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to access vector DB: {str(e)}")
+            print(f"Failed to access vector DB: {str(e)}. Proceeding without context.")
 
         # 👤 Final constructed prompt with context
         user_prompt = f"{req.user_prompt}\n\nContext:\n{context}"
 
-        print("✅ API key loaded:", os.getenv("HF_API_TOKEN"))
+        print("API key loaded:", os.getenv("HF_API_TOKEN"))
         client = InferenceClient(provider="cerebras", api_key=os.getenv("HF_API_TOKEN"))
 
         try:
