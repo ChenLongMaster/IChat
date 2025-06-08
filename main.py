@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 import traceback
 import shutil
 from urllib.parse import urlparse
-
+import glob
 from qdrant_client import QdrantClient
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from llama_index.core import StorageContext, VectorStoreIndex
@@ -41,7 +41,9 @@ load_dotenv()
 MODEL_PATH = os.getenv("MODEL_PATH")
 USE_GPU = os.getenv("USE_GPU", "False").lower() == "true"
 DEFAULT_PROMPT = "You are a helpful assistant."
-ROOT_FOLDER = r"D:\\IChat.Sources\\Upload"
+UPLOAD_FOLDERR = r"D:\\IChat.Sources\\Upload"
+PROMPT_FOLDER = r"C:\\IChat.Sources\\Instruction"
+
 
 # Custom file filter to exclude files from the 'Prompt' directory
 def exclude_prompt_folder(filepath: str) -> bool:
@@ -75,7 +77,7 @@ def load_system_prompt(data_dir: str, tenant_id: str) -> str:
 def get_storage_paths(tenant_id: str):
     return (
         f"storage/{tenant_id}",
-        f"D:\\IChat.Sources\\Upload\\{tenant_id}"
+        f"ROOT_FOLDER\\{tenant_id}"
     )
 
 # === Main app function ===
@@ -120,18 +122,30 @@ def main_app():
 
     @app.post("/bot")
     async def get_bot_response(req: PromptRequest):
-        prompt_path = os.path.join(ROOT_FOLDER, req.tenant_id, "Instruction", "instruction.txt")
+        prompt_folder = os.path.join(PROMPT_FOLDER, req.tenant_id)
         system_prompt = DEFAULT_PROMPT
-        if os.path.exists(prompt_path):
-            with open(prompt_path, "r", encoding="utf-8") as f:
-                system_prompt = f.read()
-            print(f"System prompt loaded from {prompt_path}")
+
+        # 🔍 Load all prompt files recursively
+        if os.path.exists(prompt_folder):
+            prompt_files = sorted(glob.glob(os.path.join(prompt_folder, "**", "*.txt"), recursive=True))
+
+            if prompt_files:
+                prompt_chunks = []
+                for path in prompt_files:
+                    with open(path, "r", encoding="utf-8") as f:
+                        prompt_chunks.append(f.read())
+                    print(f"✅ Loaded prompt: {os.path.basename(path)}")
+
+                system_prompt = "\n\n".join(prompt_chunks)
+            else:
+                print(f"⚠️ No .txt files found in {prompt_folder}. Using default prompt.")
         else:
-            print(f"No custom prompt file found at {prompt_path}. Using default prompt.")
+            print(f"⚠️ Folder not found: {prompt_folder}. Using default prompt.")
+
         context = ""
-        # 🔍 Check if Qdrant collection exists
+
+        # 🔍 Try retrieving context from Qdrant if available
         try:
-            # Try connecting to Qdrant and retrieving context
             qdrant_client = QdrantClient(host="localhost", port=6333)
             collections = qdrant_client.get_collections().collections
             collection_names = [col.name for col in collections]
@@ -141,20 +155,22 @@ def main_app():
                 index = VectorStoreIndex.from_vector_store(vector_store)
                 retriever = index.as_retriever(similarity_top_k=3)
                 nodes = retriever.retrieve(req.user_prompt)
-                context = "\n\n".join([n.get_content() for n in nodes])
-                print(f"Retrieved {len(nodes)} context nodes.")
+
+                if nodes:
+                    context = "\n\n".join([n.get_content() for n in nodes])
+                    print(f"✅ Retrieved {len(nodes)} context nodes.")
+                else:
+                    print("ℹ️ Qdrant index found but no relevant context retrieved.")
             else:
-                print(f"No vector index found for tenant '{req.tenant_id}'. Proceeding without RAG context.")
+                print(f"⚠️ No vector index found for tenant '{req.tenant_id}'. Proceeding without RAG context.")
 
         except Exception as e:
-            print(f"Failed to access vector DB: {str(e)}. Proceeding without context.")
+            print(f"❌ Qdrant access failed: {str(e)}. Proceeding without RAG context.")
 
-        # 👤 Final constructed prompt with context
+        # 🧠 Final prompt
         user_prompt = f"{req.user_prompt}\n\nContext:\n{context}"
-
-        print("API key loaded:", os.getenv("HF_API_TOKEN"))
         client = InferenceClient(provider="cerebras", api_key=os.getenv("HF_API_TOKEN"))
-
+        print(system_prompt);
         try:
             stream = client.chat.completions.create(
                 model="meta-llama/Llama-3.3-70B-Instruct",
@@ -181,13 +197,14 @@ def main_app():
             status = getattr(e.response, "status_code", "unknown")
             text = getattr(e.response, "text", str(e))
             if status == 429:
-                raise HTTPException(status_code=429, detail=f"Hugging Face rate limit reached. Please try again later.")
+                raise HTTPException(status_code=429, detail="Hugging Face rate limit reached. Please try again later.")
             elif status == 401:
-                raise HTTPException(status_code=401, detail=f"Invalid or missing Hugging Face API token.")
+                raise HTTPException(status_code=401, detail="Invalid or missing Hugging Face API token.")
             elif status == 403:
-                raise HTTPException(status_code=403, detail=f"Access to this model is restricted or you’ve hit your token quota.")
+                raise HTTPException(status_code=403, detail="Access to this model is restricted or you’ve hit your token quota.")
             else:
                 raise HTTPException(status_code=500, detail=f"Inference API error: {str(e)}")
+
 
     @app.post("/reset")
     async def reset_memory():
@@ -201,7 +218,7 @@ def main_app():
     async def train_rag(train_request: TrainRequest):
         try:
             tenant_id = train_request.tenant_id
-            tenant_data_dir = f"{ROOT_FOLDER}\\{tenant_id}"
+            tenant_data_dir = f"{UPLOAD_FOLDER}\\{tenant_id}"
             input_files = []
 
             for root, _, files in os.walk(tenant_data_dir):
@@ -281,7 +298,7 @@ def main_app():
                 raise HTTPException(status_code=404, detail="No content found on the page.")
 
             # Prepare save folder
-            tenant_crawl_dir = f"{ROOT_FOLDER}\\{tenant_id}\\crawl"
+            tenant_crawl_dir = f"{UPLOAD_FOLDER}\\{tenant_id}\\crawl"
             os.makedirs(tenant_crawl_dir, exist_ok=True)
 
             for idx, doc in enumerate(documents):
