@@ -1,15 +1,12 @@
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import shutil
-import zipfile
 from fastapi import FastAPI, UploadFile, File, Form,HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
 from requests.exceptions import HTTPError
-import requests
 from fastapi.responses import JSONResponse
-import traceback
 import shutil
 from urllib.parse import urlparse
 import glob
@@ -18,8 +15,6 @@ from llama_index.vector_stores.qdrant import QdrantVectorStore
 from llama_index.core import StorageContext, VectorStoreIndex
 
 from llama_cpp import Llama
-from llama_index.llms.llama_cpp import LlamaCPP
-from llama_index.llms.llama_cpp.llama_utils import messages_to_prompt, completion_to_prompt
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core.settings import Settings
 from llama_index.core.llms import ChatMessage, MessageRole
@@ -38,11 +33,10 @@ import uuid
 load_dotenv()
 
 # === Constants ===
-MODEL_PATH = os.getenv("MODEL_PATH")
 USE_GPU = os.getenv("USE_GPU", "False").lower() == "true"
 DEFAULT_PROMPT = "You are a helpful assistant."
-UPLOAD_FOLDERR = r"D:\\IChat.Sources\\Upload"
-PROMPT_FOLDER = r"C:\\IChat.Sources\\Instruction"
+UPLOAD_FOLDER = r"D:\\IChat.Sources\\Upload"
+PROMPT_FOLDER = r"D:\\IChat.Sources\\Instruction"
 
 
 # Custom file filter to exclude files from the 'Prompt' directory
@@ -92,18 +86,6 @@ def main_app():
         allow_headers=["*"],
     )
 
-    llm = LlamaCPP(
-        model_path=MODEL_PATH,
-        temperature=0.5,
-        max_new_tokens=250,
-        context_window=2048,
-        model_kwargs=get_model_kwargs(),
-        messages_to_prompt=messages_to_prompt,
-        completion_to_prompt=completion_to_prompt,
-        verbose=True
-    )
-
-    Settings.llm = llm
     Settings.embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
     @app.get("/clients")
@@ -169,10 +151,10 @@ def main_app():
 
         # 🧠 Final prompt
         user_prompt = f"{req.user_prompt}\n\nContext:\n{context}"
-        client = InferenceClient(provider="cerebras", api_key=os.getenv("HF_API_TOKEN"))
-        print(system_prompt);
+
         try:
-            stream = client.chat.completions.create(
+            client = InferenceClient(provider="cerebras", api_key=os.getenv("HF_API_TOKEN"))
+            response = client.chat.completions.create(
                 model="meta-llama/Llama-3.3-70B-Instruct",
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -181,17 +163,9 @@ def main_app():
                 temperature=0.5,
                 max_tokens=500,
                 top_p=0.7,
-                stream=True
+                stream=False  # <-- Turn off streaming here
             )
-
-            output = ""
-            for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta:
-                    delta = chunk.choices[0].delta
-                    if "content" in delta and delta["content"] is not None:
-                        output += delta["content"]
-
-            return {"response": output}
+            return {"response": response.choices[0].message["content"]}
 
         except HTTPError as e:
             status = getattr(e.response, "status_code", "unknown")
@@ -204,6 +178,7 @@ def main_app():
                 raise HTTPException(status_code=403, detail="Access to this model is restricted or you’ve hit your token quota.")
             else:
                 raise HTTPException(status_code=500, detail=f"Inference API error: {str(e)}")
+
 
 
     @app.post("/reset")
