@@ -41,7 +41,7 @@ load_dotenv()
 MODEL_PATH = os.getenv("MODEL_PATH")
 USE_GPU = os.getenv("USE_GPU", "False").lower() == "true"
 DEFAULT_PROMPT = "You are a helpful assistant."
-UPLOAD_FOLDERR = r"D:\\IChat.Sources\\Upload"
+UPLOAD_FOLDER = r"D:\\IChat.Sources\\Upload"
 PROMPT_FOLDER = r"C:\\IChat.Sources\\Instruction"
 
 
@@ -93,7 +93,7 @@ def main_app():
     )
 
     llm = LlamaCPP(
-        model_path=MODEL_PATH,
+        # model_path=MODEL_PATH,
         temperature=0.5,
         max_new_tokens=250,
         context_window=2048,
@@ -301,7 +301,7 @@ def main_app():
             tenant_crawl_dir = f"{UPLOAD_FOLDER}\\{tenant_id}\\crawl"
             os.makedirs(tenant_crawl_dir, exist_ok=True)
 
-            for idx, doc in enumerate(documents):
+            for idx, doc in enumerate(documents, start=1):
                 # Add metadata
                 doc.metadata = {
                     "tenant_id": tenant_id,
@@ -313,9 +313,12 @@ def main_app():
                 # Build filename → domain + vector_id
                 file_name = f"{website_domain}_{vector_id}.txt"
                 file_path = os.path.join(tenant_crawl_dir, file_name)
-
+                clean_text = "\n".join(
+                    line.strip() for line in doc.text.splitlines() if line.strip()
+                )
+                
                 with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(doc.text)
+                    f.write(f"URL: {url}\n\n{clean_text}")
 
                 print(f"Saved crawled content to {file_path}")
 
