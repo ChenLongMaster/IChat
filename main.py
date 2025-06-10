@@ -27,7 +27,7 @@ from llama_index.core import (
 )
 from llama_index.core.chat_engine import ContextChatEngine
 from llama_index.readers.web import BeautifulSoupWebReader
-import json
+
 import uuid
 # === Load ENV ===
 load_dotenv()
@@ -104,9 +104,9 @@ def main_app():
 
     @app.post("/bot")
     async def get_bot_response(req: PromptRequest):
-        prompt_folder = os.path.join(PROMPT_FOLDER, "GeneralSetting", req.tenant_id)
+        prompt_folder = os.path.join(PROMPT_FOLDER, req.tenant_id)
         system_prompt = DEFAULT_PROMPT
-        temperature = 0
+        temperature = 0.5
         max_tokens = 500
 
         # 🔍 Load all prompt files recursively
@@ -114,15 +114,13 @@ def main_app():
             prompt_files = sorted(glob.glob(os.path.join(prompt_folder, "**", "*.txt"), recursive=True))
 
             if prompt_files:
-                prompt_chunk = {}
+                prompt_chunks = []
                 for path in prompt_files:
-                    with open(path, "r", encoding="utf-8-sig") as f:
-                        prompt_chunk = json.load(f)
+                    with open(path, "r", encoding="utf-8") as f:
+                        prompt_chunks.append(f.read())
                     print(f"✅ Loaded prompt: {os.path.basename(path)}")
 
-                system_prompt = prompt_chunk["InstructionText"]
-                temperature = prompt_chunk["Temparature"]
-                max_tokens = prompt_chunk["MaxTokens"]
+                system_prompt = "\n\n".join(prompt_chunks)
             else:
                 print(f"⚠️ No .txt files found in {prompt_folder}. Using default prompt.")
         else:
