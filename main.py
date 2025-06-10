@@ -27,7 +27,7 @@ from llama_index.core import (
 )
 from llama_index.core.chat_engine import ContextChatEngine
 from llama_index.readers.web import BeautifulSoupWebReader
-
+import json
 import uuid
 # === Load ENV ===
 load_dotenv()
@@ -106,19 +106,23 @@ def main_app():
     async def get_bot_response(req: PromptRequest):
         prompt_folder = os.path.join(PROMPT_FOLDER, req.tenant_id)
         system_prompt = DEFAULT_PROMPT
+        temperature = 0
+        max_tokens = 500
 
         # 🔍 Load all prompt files recursively
         if os.path.exists(prompt_folder):
             prompt_files = sorted(glob.glob(os.path.join(prompt_folder, "**", "*.txt"), recursive=True))
 
             if prompt_files:
-                prompt_chunks = []
+                prompt_chunk = {}
                 for path in prompt_files:
-                    with open(path, "r", encoding="utf-8") as f:
-                        prompt_chunks.append(f.read())
+                    with open(path, "r", encoding="utf-8-sig") as f:
+                        prompt_chunk = json.load(f)
                     print(f"✅ Loaded prompt: {os.path.basename(path)}")
 
-                system_prompt = "\n\n".join(prompt_chunks)
+                system_prompt = prompt_chunk["InstructionText"]
+                temperature = prompt_chunk["Temparature"]
+                max_tokens = prompt_chunk["MaxTokens"]
             else:
                 print(f"⚠️ No .txt files found in {prompt_folder}. Using default prompt.")
         else:
@@ -160,8 +164,8 @@ def main_app():
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.5,
-                max_tokens=500,
+                temperature=temperature,
+                max_tokens=max_tokens,
                 top_p=0.7,
                 stream=False  # <-- Turn off streaming here
             )
@@ -290,7 +294,7 @@ def main_app():
                 file_path = os.path.join(tenant_crawl_dir, file_name)
                 clean_text = "\n".join(
                     line.strip() for line in doc.text.splitlines() if line.strip()
-                )
+                 )
                 
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(f"URL: {url}\n\n{clean_text}")
