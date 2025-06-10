@@ -104,7 +104,7 @@ def main_app():
 
     @app.post("/bot")
     async def get_bot_response(req: PromptRequest):
-        prompt_folder = os.path.join(PROMPT_FOLDER, req.tenant_id)
+        prompt_folder = os.path.join(PROMPT_FOLDER, "GeneralSetting", req.tenant_id)
         system_prompt = DEFAULT_PROMPT
         temperature = 0
         max_tokens = 500
@@ -202,7 +202,7 @@ def main_app():
 
             for root, _, files in os.walk(tenant_data_dir):
                 for f in files:
-                    if f.lower() == "instruction.txt":
+                    if f.lower() == "config.txt":
                         continue
                     full_path = os.path.join(root, f)
                     input_files.append(full_path)
