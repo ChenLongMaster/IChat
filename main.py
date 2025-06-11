@@ -27,6 +27,7 @@ from llama_index.core import (
 )
 from llama_index.core.chat_engine import ContextChatEngine
 from llama_index.readers.web import BeautifulSoupWebReader
+import json
 
 import uuid
 # === Load ENV ===
@@ -37,6 +38,7 @@ USE_GPU = os.getenv("USE_GPU", "False").lower() == "true"
 DEFAULT_PROMPT = "You are a helpful assistant."
 UPLOAD_FOLDER = r"D:\\IChat.Sources\\Upload"
 PROMPT_FOLDER = r"D:\\IChat.Sources\\Instruction"
+GENERIC_SETTING_FOLDER = r"D:\\IChat.Sources\\GeneralSetting"
 
 
 # Custom file filter to exclude files from the 'Prompt' directory
@@ -127,6 +129,32 @@ def main_app():
             print(f"⚠️ Folder not found: {prompt_folder}. Using default prompt.")
 
         context = ""
+
+        # get general setting
+        settingPath = os.path.join(GENERIC_SETTING_FOLDER, req.tenant_id)
+        # 🔍 Load all setting files recursively
+        if os.path.exists(settingPath):
+            setting_files = sorted(glob.glob(os.path.join(settingPath, "**", "*.txt"), recursive=True))
+
+            if setting_files:
+                setting_chunk = {}
+                for path in setting_files:
+                    with open(path, "r", encoding="utf-8-sig") as f:
+                        content = f.read().strip()
+                        if not content:
+                            print(f"⚠️ Skipping empty file: {path}")
+                            continue
+                        try:
+                            setting_chunk = json.loads(content)
+                            temperature = setting_chunk.get("Temparature")
+                            max_tokens = setting_chunk.get("MaxTokens")
+                        except json.JSONDecodeError as e:
+                            print(f"❌ JSON decode error in {path}: {e}")
+                            continue
+
+                    print(f"✅ Loaded setting: {os.path.basename(path)}, setting: temperature - {temperature}, max_tokens: {max_tokens}")
+        else:
+            print(f"⚠️ Folder not found: {settingPath}. Using default setting.")
 
         # 🔍 Try retrieving context from Qdrant if available
         try:
