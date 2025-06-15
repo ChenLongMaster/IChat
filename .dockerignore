@@ -1,0 +1,27 @@
+# Python cache and build files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.env
+
+# Model files (if using remote inference instead)
+models/
+node_modules/
+package-lock.json
+*.bin
+*.pt
+*.ckpt
+
+# Git and VS Code clutter
+.git/
+.gitignore
+.vscode/
+
+# Local dev/test files
+*.log
+.DS_Store
+
