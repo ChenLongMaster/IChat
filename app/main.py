@@ -1,12 +1,13 @@
 import os
-import shutil
-from fastapi import FastAPI, UploadFile, File, Form,HTTPException
+import traceback
+from fastapi import FastAPI,HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
 from requests.exceptions import HTTPError
 from fastapi.responses import JSONResponse
 import shutil
+import httpx
 from urllib.parse import urlparse
 import glob
 from qdrant_client import QdrantClient
@@ -159,7 +160,7 @@ def main_app():
 
         try:
             # Choose model dynamically (env var, tenant config, etc.)
-            use_huggingface = "false"
+            use_huggingface = False
 
             if use_huggingface:
                 print("📡 Calling Hugging Face model...")
