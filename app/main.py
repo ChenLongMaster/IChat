@@ -276,6 +276,45 @@ def main_app():
                 "trace": traceback.format_exc()
             })
 
+    @app.post("/delete-vectors")
+    async def delete_vectors(request: DeleteVectorRequest):
+        try:
+            qdrant_client = QdrantClient(host="localhost", port=6333)
+
+            # Confirm collection exists
+            collections = qdrant_client.get_collections().collections
+            if request.tenant_id not in [col.name for col in collections]:
+                raise HTTPException(status_code=404, detail=f"Collection '{request.tenant_id}' not found in Qdrant.")
+
+            deleted = 0
+            for file_name in request.fileNames:
+                try:
+                    qdrant_client.delete(
+                        collection_name=request.tenant_id,
+                        points_selector=Filter(
+                            must=[
+                                FieldCondition(
+                                    key="file_name",
+                                    match=MatchValue(value=file_name)
+                                )
+                            ]
+                        )
+                    )
+                    print(f"🗑️ Deleted all vectors with file_name = {file_name}")
+                    deleted += 1
+                except Exception as ve:
+                    print(f"⚠️ Failed to delete file {file_name}: {str(ve)}")
+
+            return {"message": f"Deleted {deleted} out of {len(request.fileNames)} file(s)."}
+
+        except Exception as e:
+            print(traceback.format_exc())
+            raise HTTPException(status_code=500, detail={
+                "error": str(e),
+                "trace": traceback.format_exc()
+            })
+
+
     @app.post("/crawl-job")
     async def crawl_job(crawl_request: CrawlRequest):
         url = crawl_request.url
