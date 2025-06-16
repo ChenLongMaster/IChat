@@ -12,7 +12,7 @@ import glob
 from qdrant_client import QdrantClient
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from llama_index.core import StorageContext, VectorStoreIndex
-
+from fastapi.middleware.cors import CORSMiddleware
 from llama_cpp import Llama
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core import (
@@ -159,7 +159,7 @@ def main_app():
 
         try:
             # Choose model dynamically (env var, tenant config, etc.)
-            use_huggingface = "true"
+            use_huggingface = "false"
 
             if use_huggingface:
                 print("📡 Calling Hugging Face model...")

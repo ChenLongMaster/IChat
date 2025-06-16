@@ -9,13 +9,13 @@ services:
       - qdrant_data:/qdrant/storage
 
   chatbot-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: chenlongmaster/ichat-api:latest
+    container_name: chatbot-api
     environment:
       QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
     ports:
-      - "8000:8000"
+      - "5001:8000"
     depends_on:
       - qdrant
 
