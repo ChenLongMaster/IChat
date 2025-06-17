@@ -1,38 +1,34 @@
 import os
 import traceback
-from fastapi import FastAPI,HTTPException
+import glob
+import httpx
+import json
+from urllib.parse import urlparse
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
 from requests.exceptions import HTTPError
-from fastapi.responses import JSONResponse
-import shutil
-import httpx
-from urllib.parse import urlparse
-import glob
+
 from qdrant_client import QdrantClient
+from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+from pptx import Presentation
+
 from llama_index.vector_stores.qdrant import QdrantVectorStore
-from llama_index.core import StorageContext, VectorStoreIndex
-from fastapi.middleware.cors import CORSMiddleware
-from llama_cpp import Llama
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core import (
-    SimpleDirectoryReader, StorageContext, VectorStoreIndex
-)
-from llama_index.core.settings import Settings
-from llama_index.core.llms import ChatMessage, MessageRole
-from llama_index.core.memory import ChatMemoryBuffer
-from llama_index.core import (
-    VectorStoreIndex,
     SimpleDirectoryReader,
     StorageContext,
-    load_index_from_storage,
+    VectorStoreIndex,
+    Settings
 )
-from llama_index.core.chat_engine import ContextChatEngine
 from llama_index.readers.web import BeautifulSoupWebReader
 from llama_index.core.schema import Document
-from pptx import Presentation
-from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 # === Load ENV ===
 load_dotenv()
