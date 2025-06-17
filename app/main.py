@@ -2,6 +2,7 @@ import os
 import traceback
 import glob
 import httpx
+import math
 import json
 from urllib.parse import urlparse
 
@@ -30,44 +31,59 @@ from llama_index.core import (
 from llama_index.readers.web import BeautifulSoupWebReader
 from llama_index.core.schema import Document
 
-#Ragas
+# Ragas core
 from datasets import Dataset
 from ragas import evaluate
 from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
-from ragas.llms import LangchainLLMWrapper
 
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-from langchain.llms import HuggingFacePipeline
-from langchain.embeddings import HuggingFaceEmbeddings
+# Ragas model wrappers
+from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
+
+# Transformers (Hugging Face)
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
+
+# LangChain integration
+from langchain_community.llms import HuggingFaceHub
+
+from langchain_community.embeddings import HuggingFaceEmbeddings
+
 #LangChain
 # You can cache this globally so it doesn't re-download every call
-tokenizer = AutoTokenizer.from_pretrained("HuggingFaceH4/zephyr-7b-beta")
-model = AutoModelForCausalLM.from_pretrained(
-    "HuggingFaceH4/zephyr-7b-beta",
-     trust_remote_code=True
+# ✅ Use a fast and light model just for evaluation
+# model_name = "google/flan-t5-large"
+# tokenizer = AutoTokenizer.from_pretrained(model_name)
+# model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+
+# pipe = pipeline(
+#     "text2text-generation",  # Use "text2text-generation" instead of "text-generation" for T5 models
+#     model=model,
+#     tokenizer=tokenizer,
+#     max_length=512,
+#     truncation=True,           # 👈 this ensures input is trimmed
+#     max_new_tokens=128,
+#     do_sample=False,
+# )
+
+wrapped_llm = LangchainLLMWrapper(
+    HuggingFaceHub(
+        repo_id="mistralai/Mistral-7B-Instruct-v0.1",
+        model_kwargs={"temperature": 0.5, "max_new_tokens": 512}
+    )
 )
-pipe = pipeline(
-    "text-generation",
-    model=model,
-    tokenizer=tokenizer,
-    return_full_text=False,
-    max_new_tokens=128,   # ⬅️ less output = less time
-    temperature=0.0,      # ⬅️ deterministic + disables sampling
-    do_sample=False       # ⬅️ match deterministic setup
-)
-wrapped_llm = LangchainLLMWrapper(HuggingFacePipeline(pipeline=pipe))
 wrapped_emb = LangchainEmbeddingsWrapper(
     HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-)# === Load ENV ===
+)
+
+# === Load ENV ===
 load_dotenv()
 
 # === Constants ===
 USE_GPU = os.getenv("USE_GPU", "False").lower() == "true"
 DEFAULT_PROMPT = "You are a helpful assistant."
-UPLOAD_FOLDER = r"D:\\IChat.Sources\\Upload"
-PROMPT_FOLDER = r"D:\\IChat.Sources\\Instruction"
-GENERIC_SETTING_FOLDER = r"D:\\IChat.Sources\\GeneralSetting"
+UPLOAD_FOLDER = r"C:\\IChat.Sources\\Upload"
+PROMPT_FOLDER = r"C:\\IChat.Sources\\Instruction"
+GENERIC_SETTING_FOLDER = r"C:\\IChat.Sources\\GeneralSetting"
 
 
 qdrant_host = os.getenv("QDRANT_HOST", "localhost")  # default for local dev
@@ -97,13 +113,8 @@ class TrainRequest(BaseModel):
 class DeleteVectorRequest(BaseModel):
     tenant_id: str
     fileNames: list[str]
-# === Helpers ===
-def get_model_kwargs():
-    kwargs = {"n_threads": 8}
-    kwargs["n_gpu_layers"] = -1 if USE_GPU else 0
-    print("Using GPU" if USE_GPU else "Using CPU")
-    return kwargs
 
+# === Helpers ===
 def load_system_prompt(data_dir: str, tenant_id: str) -> str:
     prompt_path = os.path.join(data_dir, f"{tenant_id}_prompt.txt")
     if os.path.exists(prompt_path):
@@ -147,17 +158,25 @@ def main_app():
             if reference:
                 metrics += [context_precision, context_recall]
 
-            scores = evaluate(
+            result = evaluate(
                 dataset,
                 metrics=metrics,
-                llm= wrapped_llm,
-                embeddings=wrapped_emb  # ✅ prevent Ragas from trying OpenAI
+                llm=wrapped_llm,
+                embeddings=wrapped_emb
             )
-            return {metric.name: scores[metric.name] for metric in scores}
+
+            print("🎯 Raw RAG scores:", result.scores)
+
+            return {
+                k: (float(v) if v is not None and not math.isnan(v) else None)
+                for k, v in result.scores.items()
+            }
 
         except Exception as e:
             print("⚠️ RAG evaluation failed:", e)
             return {}
+
+
 
     @app.post("/bot")
     async def get_bot_response(req: PromptRequest):
@@ -191,7 +210,7 @@ def main_app():
                     if content:
                         try:
                             config = json.loads(content)
-                            temperature = config.get("Temparature", temperature)
+                            temperature = config.get("Temperature", temperature)
                             max_tokens = config.get("MaxTokens", max_tokens)
                         except json.JSONDecodeError as e:
                             print(f"❌ JSON decode error in {file}: {e}")
