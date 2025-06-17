@@ -30,7 +30,36 @@ from llama_index.core import (
 from llama_index.readers.web import BeautifulSoupWebReader
 from llama_index.core.schema import Document
 
-# === Load ENV ===
+#Ragas
+from datasets import Dataset
+from ragas import evaluate
+from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
+from ragas.llms import LangchainLLMWrapper
+
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from langchain.llms import HuggingFacePipeline
+from langchain.embeddings import HuggingFaceEmbeddings
+from ragas.embeddings import LangchainEmbeddingsWrapper
+#LangChain
+# You can cache this globally so it doesn't re-download every call
+tokenizer = AutoTokenizer.from_pretrained("HuggingFaceH4/zephyr-7b-beta")
+model = AutoModelForCausalLM.from_pretrained(
+    "HuggingFaceH4/zephyr-7b-beta",
+     trust_remote_code=True
+)
+pipe = pipeline(
+    "text-generation",
+    model=model,
+    tokenizer=tokenizer,
+    return_full_text=False,
+    max_new_tokens=128,   # ⬅️ less output = less time
+    temperature=0.0,      # ⬅️ deterministic + disables sampling
+    do_sample=False       # ⬅️ match deterministic setup
+)
+wrapped_llm = LangchainLLMWrapper(HuggingFacePipeline(pipeline=pipe))
+wrapped_emb = LangchainEmbeddingsWrapper(
+    HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+)# === Load ENV ===
 load_dotenv()
 
 # === Constants ===
@@ -102,6 +131,34 @@ def main_app():
 
     Settings.embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
+    def evaluate_rag_result(question: str, answer: str, contexts: list[str], reference: str | None = None) -> dict:
+        try:
+            entry = {
+                "question": question,
+                "answer": answer,
+                "contexts": contexts
+            }
+            if reference:
+                entry["reference"] = reference
+
+            dataset = Dataset.from_list([entry])
+
+            metrics = [faithfulness, answer_relevancy]
+            if reference:
+                metrics += [context_precision, context_recall]
+
+            scores = evaluate(
+                dataset,
+                metrics=metrics,
+                llm= wrapped_llm,
+                embeddings=wrapped_emb  # ✅ prevent Ragas from trying OpenAI
+            )
+            return {metric.name: scores[metric.name] for metric in scores}
+
+        except Exception as e:
+            print("⚠️ RAG evaluation failed:", e)
+            return {}
+
     @app.post("/bot")
     async def get_bot_response(req: PromptRequest):
         prompt_folder = os.path.join(PROMPT_FOLDER, req.tenant_id)
@@ -140,6 +197,7 @@ def main_app():
                             print(f"❌ JSON decode error in {file}: {e}")
 
         context = ""
+        nodes = []
         try:
             qdrant_client = QdrantClient(host=qdrant_host, port=6333)
             collections = qdrant_client.get_collections().collections
@@ -165,8 +223,22 @@ def main_app():
                 print("⚙️ Calling Ollama self-hosted model...")
                 result = await call_local_ollama_model(user_prompt, system_prompt, temperature, max_tokens)
 
-            return {"response": result}
+            rag_scores = evaluate_rag_result(
+                question=req.user_prompt,
+                answer=result,
+                contexts=[n.get_content() for n in nodes]
+            )
 
+            response = {
+                "response": result,
+                "rag_evaluation": rag_scores
+            }
+
+            # 🖨️ Print to console for live demo
+            print("\n📤 Final Output to User:")
+            print(json.dumps(response, indent=2, ensure_ascii=False))
+            return response
+        
         except Exception as e:
             print("❌ Model call failed:", traceback.format_exc())
             raise HTTPException(status_code=500, detail="Model call failed.")
