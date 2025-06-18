@@ -30,37 +30,26 @@ from llama_index.core import (
 from llama_index.readers.web import BeautifulSoupWebReader
 from llama_index.core.schema import Document
 
-#Ragas
+# Ragas
 from datasets import Dataset
 from ragas import evaluate
 from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
 from ragas.llms import LangchainLLMWrapper
-
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-from langchain.llms import HuggingFacePipeline
-from langchain.embeddings import HuggingFaceEmbeddings
 from ragas.embeddings import LangchainEmbeddingsWrapper
-#LangChain
-# You can cache this globally so it doesn't re-download every call
-tokenizer = AutoTokenizer.from_pretrained("HuggingFaceH4/zephyr-7b-beta")
-model = AutoModelForCausalLM.from_pretrained(
-    "HuggingFaceH4/zephyr-7b-beta",
-     trust_remote_code=True
-)
-pipe = pipeline(
-    "text-generation",
-    model=model,
-    tokenizer=tokenizer,
-    return_full_text=False,
-    max_new_tokens=128,   # ⬅️ less output = less time
-    temperature=0.0,      # ⬅️ deterministic + disables sampling
-    do_sample=False       # ⬅️ match deterministic setup
-)
-wrapped_llm = LangchainLLMWrapper(HuggingFacePipeline(pipeline=pipe))
+
+# LLM + Embeddings
+from langchain_openai import ChatOpenAI
+from ragas.llms import LangchainLLMWrapper
+from langchain_community.embeddings import HuggingFaceEmbeddings
+
+# === Load ENV ===
+load_dotenv()
+
+
+llm = LangchainLLMWrapper(ChatOpenAI(model="gpt-4o"))
 wrapped_emb = LangchainEmbeddingsWrapper(
     HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-)# === Load ENV ===
-load_dotenv()
+)
 
 # === Constants ===
 USE_GPU = os.getenv("USE_GPU", "False").lower() == "true"
@@ -147,17 +136,30 @@ def main_app():
             if reference:
                 metrics += [context_precision, context_recall]
 
-            scores = evaluate(
+            result = evaluate(
                 dataset,
                 metrics=metrics,
-                llm= wrapped_llm,
-                embeddings=wrapped_emb  # ✅ prevent Ragas from trying OpenAI
+                llm=llm,
+                embeddings=wrapped_emb,
             )
-            return {metric.name: scores[metric.name] for metric in scores}
+
+            # ✅ Brute-force string parsing
+            raw_str = str(result)  # Looks like: {'faithfulness': 0.9, 'answer_relevancy': 0.8}
+            print("🧨 Raw string result:", raw_str)
+
+            # Turn into real JSON-like dict
+            import ast
+            safe_result = ast.literal_eval(raw_str)
+
+            return safe_result
 
         except Exception as e:
             print("⚠️ RAG evaluation failed:", e)
-            return {}
+            return {"error": str(e)}
+
+
+
+
 
     @app.post("/bot")
     async def get_bot_response(req: PromptRequest):
@@ -245,6 +247,7 @@ def main_app():
         
     async def call_local_ollama_model(prompt: str, system_prompt: str, temperature: float, max_tokens: int):
         full_prompt = f"{system_prompt}\n\n{prompt}"
+        print(full_prompt)
         payload = {
             "model": "llama3",
             "prompt": full_prompt,
