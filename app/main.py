@@ -2,6 +2,7 @@ import os
 import traceback
 import glob
 import httpx
+import math
 import json
 from urllib.parse import urlparse
 
@@ -34,6 +35,8 @@ from llama_index.core.schema import Document
 from datasets import Dataset
 from ragas import evaluate
 from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
+
+# Ragas model wrappers
 from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
 
@@ -54,9 +57,9 @@ wrapped_emb = LangchainEmbeddingsWrapper(
 # === Constants ===
 USE_GPU = os.getenv("USE_GPU", "False").lower() == "true"
 DEFAULT_PROMPT = "You are a helpful assistant."
-UPLOAD_FOLDER = r"D:\\IChat.Sources\\Upload"
-PROMPT_FOLDER = r"D:\\IChat.Sources\\Instruction"
-GENERIC_SETTING_FOLDER = r"D:\\IChat.Sources\\GeneralSetting"
+UPLOAD_FOLDER = r"C:\\IChat.Sources\\Upload"
+PROMPT_FOLDER = r"C:\\IChat.Sources\\Instruction"
+GENERIC_SETTING_FOLDER = r"C:\\IChat.Sources\\GeneralSetting"
 
 
 qdrant_host = os.getenv("QDRANT_HOST", "localhost")  # default for local dev
@@ -86,13 +89,8 @@ class TrainRequest(BaseModel):
 class DeleteVectorRequest(BaseModel):
     tenant_id: str
     fileNames: list[str]
-# === Helpers ===
-def get_model_kwargs():
-    kwargs = {"n_threads": 8}
-    kwargs["n_gpu_layers"] = -1 if USE_GPU else 0
-    print("Using GPU" if USE_GPU else "Using CPU")
-    return kwargs
 
+# === Helpers ===
 def load_system_prompt(data_dir: str, tenant_id: str) -> str:
     prompt_path = os.path.join(data_dir, f"{tenant_id}_prompt.txt")
     if os.path.exists(prompt_path):
@@ -136,6 +134,7 @@ def main_app():
             if reference:
                 metrics += [context_precision, context_recall]
 
+            result = evaluate(
             result = evaluate(
                 dataset,
                 metrics=metrics,
@@ -193,7 +192,7 @@ def main_app():
                     if content:
                         try:
                             config = json.loads(content)
-                            temperature = config.get("Temparature", temperature)
+                            temperature = config.get("Temperature", temperature)
                             max_tokens = config.get("MaxTokens", max_tokens)
                         except json.JSONDecodeError as e:
                             print(f"❌ JSON decode error in {file}: {e}")
