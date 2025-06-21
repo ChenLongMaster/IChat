@@ -37,12 +37,11 @@ from ragas import evaluate
 from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
 
 # Ragas model wrappers
-from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
+from ragas.llms import LangchainLLMWrapper
 
 # LLM + Embeddings
 from langchain_openai import ChatOpenAI
-from ragas.llms import LangchainLLMWrapper
 from langchain_community.embeddings import HuggingFaceEmbeddings
 
 # === Load ENV ===
@@ -78,6 +77,8 @@ def load_pptx(file_path: str) -> str:
 class PromptRequest(BaseModel):
     tenant_id: str
     user_prompt: str
+    do_evaluation: bool = False 
+
 
 class CrawlRequest(BaseModel):
     tenant_id: str
@@ -104,21 +105,7 @@ def get_storage_paths(tenant_id: str):
         f"ROOT_FOLDER\\{tenant_id}"
     )
 
-# === Main app function ===
-def main_app():
-    app = FastAPI()
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    Settings.embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
-
-    def evaluate_rag_result(question: str, answer: str, contexts: list[str], reference: str | None = None) -> dict:
+def evaluate_rag_result(question: str, answer: str, contexts: list[str], reference: str | None = None) -> dict:
         try:
             entry = {
                 "question": question,
@@ -134,7 +121,6 @@ def main_app():
             if reference:
                 metrics += [context_precision, context_recall]
 
-            result = evaluate(
             result = evaluate(
                 dataset,
                 metrics=metrics,
@@ -155,10 +141,20 @@ def main_app():
         except Exception as e:
             print("⚠️ RAG evaluation failed:", e)
             return {"error": str(e)}
+        
+# === Main app function ===
+def main_app():
+    app = FastAPI()
 
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-
-
+    Settings.embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
     @app.post("/bot")
     async def get_bot_response(req: PromptRequest):
@@ -169,14 +165,12 @@ def main_app():
 
         if os.path.exists(prompt_folder):
             prompt_files = sorted(glob.glob(os.path.join(prompt_folder, "**", "*.txt"), recursive=True))
-
             if prompt_files:
                 prompt_chunks = []
                 for path in prompt_files:
                     with open(path, "r", encoding="utf-8") as f:
                         prompt_chunks.append(f.read())
                     print(f"Loaded prompt: {os.path.basename(path)}")
-
                 system_prompt = "\n\n".join(prompt_chunks)
             else:
                 print(f"No .txt files found in {prompt_folder}. Using default prompt.")
@@ -187,7 +181,8 @@ def main_app():
         if os.path.exists(setting_path):
             for dp, _, files in os.walk(setting_path):
                 for file in files:
-                    if not file.endswith(".txt"): continue
+                    if not file.endswith(".txt"):
+                        continue
                     content = open(os.path.join(dp, file), "r", encoding="utf-8-sig").read().strip()
                     if content:
                         try:
@@ -214,7 +209,6 @@ def main_app():
         user_prompt = f"{req.user_prompt}\n\nContext:\n{context}"
 
         try:
-            # Choose model dynamically (env var, tenant config, etc.)
             use_huggingface = False
 
             if use_huggingface:
@@ -224,25 +218,26 @@ def main_app():
                 print("⚙️ Calling Ollama self-hosted model...")
                 result = await call_local_ollama_model(user_prompt, system_prompt, temperature, max_tokens)
 
-            rag_scores = evaluate_rag_result(
-                question=req.user_prompt,
-                answer=result,
-                contexts=[n.get_content() for n in nodes]
-            )
-
             response = {
-                "response": result,
-                "rag_evaluation": rag_scores
+                "response": result
             }
 
-            # 🖨️ Print to console for live demo
+            if req.do_evaluation:
+                rag_scores = evaluate_rag_result(
+                    question=req.user_prompt,
+                    answer=result,
+                    contexts=[n.get_content() for n in nodes]
+                )
+                response["rag_evaluation"] = rag_scores
+
             print("\n📤 Final Output to User:")
             print(json.dumps(response, indent=2, ensure_ascii=False))
             return response
-        
+
         except Exception as e:
             print("❌ Model call failed:", traceback.format_exc())
             raise HTTPException(status_code=500, detail="Model call failed.")
+
         
     async def call_local_ollama_model(prompt: str, system_prompt: str, temperature: float, max_tokens: int):
         full_prompt = f"{system_prompt}\n\n{prompt}"
